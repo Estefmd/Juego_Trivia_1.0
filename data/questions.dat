@@ -1,0 +1,25 @@
+﻿ciencia,¿Cuál es el planeta más grande del sistema solar?,Marte,Júpiter,Saturno,Neptuno,B
+ciencia,¿Qué partícula tiene carga negativa?,Protón,Neutrón,Electrón,Positrón,C
+ciencia,¿Cuál es la fórmula química del agua?,H2O,CO2,O2,NaCl,A
+ciencia,¿Cuál es el órgano más grande del cuerpo humano?,Piel,Hígado,Pulmones,Cerebro,A
+ciencia,¿Temperatura de congelación del agua (°C)?,0,-10,10,4,A
+historia,¿En qué año llegó el hombre a la Luna?,1965,1969,1972,1959,B
+historia,¿Quién fue el primer emperador romano?,Julio César,Augusto,Nerón,Trajano,B
+historia,¿Civilización que construyó Machu Picchu?,Azteca,Maya,Inca,Olmeca,C
+historia,¿Guerra de 1914-1918?,Guerra de Secesión,Primera Guerra Mundial,Guerra Fría,Segunda Guerra Mundial,B
+historia,¿Descubridor de América?,Magallanes,Colón,Vespuccio,Cortés,B
+deportes,¿Cuántos jugadores por equipo en fútbol?,9,10,11,12,C
+deportes,¿Superficie principal del Roland Garros?,Césped,Arcilla,Dura,Madera,B
+deportes,¿Cuántos puntos vale un triple en baloncesto?,2,3,1,4,B
+deportes,¿País con más Copas del Mundo (fútbol)?,Italia,Brasil,Alemania,Argentina,B
+deportes,¿Número de sets para ganar en tenis masculino Grand Slam?,2 de 3,3 de 5,1 de 1,4 de 7,B
+geografia,¿Capital de Colombia?,Bogotá,Medellín,Cali,Barranquilla,A
+geografia,¿Río más largo del mundo?,Nilo,Amazonas,Yangtsé,Misisipi,B
+geografia,¿Montaña más alta?,K2,Everest,Aconcagua,Denali,B
+geografia,¿Océano más grande?,Atlántico,Índico,Pacífico,Ártico,C
+geografia,¿País con más islas?,Suecia,Canadá,Indonesia,Finlandia,A
+tecnologia,¿Sistema operativo de Linus Torvalds?,Windows,Linux,macOS,Android,B
+tecnologia,¿Lenguaje creado por Guido van Rossum?,Ruby,Python,Java,C,B
+tecnologia,¿Qué significa CPU?,Unidad Central de Procesamiento,Tarjeta Gráfica,Memoria de Solo Lectura,Fuente de Poder,A
+tecnologia,¿Protocolo de la web?,SMTP,FTP,HTTP,SSH,C
+tecnologia,¿Dispositivo no volátil?,RAM,SSD,Cache,Registro,B
