@@ -4,15 +4,14 @@ defmodule Trivia.Servidor do
 
   Se encarga de:
     * Conectar / autenticar usuarios.
-    * Crear y gestionar partidas mediante el `SupervisorDePartidas`.
-    * Delegar acciones a `Trivia.Partida`.
+    * Crear y gestionar partidas mediante el SupervisorDePartidas.
+    * Delegar acciones a Trivia.Partida.
 
-  También contiene el módulo `Trivia.Servidor.Consola`,
-  que implementa el menú interactivo en la terminal.
+  También contiene el módulo Trivia.Servidor.Consola,
+  que implementa el menú interactivo en la terminal (local o distribuido).
   """
 
-  alias Trivia.{GestorDeUsuarios, SupervisorDePartidas, Partida}
-
+  alias Trivia.{GestorDeUsuarios, SupervisorDePartidas, Partida, Ranking}
 
   def conectar_usuario(nombre_usuario, contrasena) do
     case GestorDeUsuarios.registrar_o_ingresar(nombre_usuario, contrasena) do
@@ -47,13 +46,15 @@ defmodule Trivia.Servidor do
 
     case SupervisorDePartidas.iniciar_partida(argumentos_partida) do
       {:ok, identificador_proceso_partida} ->
+        # El creador queda registrado como jugador de la partida
+        _ = Partida.unirse(identificador_proceso_partida, nombre_creador)
+
         {:ok, identificador_proceso_partida}
 
       otra_respuesta ->
         otra_respuesta
     end
   end
-
 
   def listar_partidas do
     SupervisorDePartidas.listar_pids_activos()
@@ -75,32 +76,70 @@ defmodule Trivia.Servidor do
         {:error, :no_encontrada}
 
       identificador_proceso_partida ->
-        Partida.unirse(identificador_proceso_partida, nombre_usuario)
+        case Partida.unirse(identificador_proceso_partida, nombre_usuario) do
+          {:ok, :unido} ->
+            {:ok, :unido, identificador_proceso_partida}
+
+          {:ok, :ya_estaba} ->
+            {:ok, :ya_estaba, identificador_proceso_partida}
+
+          {:error, motivo} ->
+            {:error, motivo}
+        end
     end
   end
-
 
   def iniciar_partida(identificador_proceso_partida, nombre_creador) do
     Partida.iniciar(identificador_proceso_partida, nombre_creador)
   end
 
-
   def responder_pregunta(identificador_proceso_partida, nombre_usuario, opcion_letra) do
     Partida.responder(identificador_proceso_partida, nombre_usuario, opcion_letra)
   end
 
+  def obtener_pregunta_actual(identificador_proceso_partida) do
+    Partida.obtener_pregunta_actual(identificador_proceso_partida)
+  end
+
+  def puntaje_usuario(nombre_usuario) do
+    GestorDeUsuarios.puntaje_propio(nombre_usuario)
+  end
+
+  def ranking_global do
+    GestorDeUsuarios.ranking_global()
+  end
+
+
+  def ranking_por_tema(categoria) do
+    Ranking.ranking_por_tema(categoria)
+  end
+
+
+  def obtener_resumen_partida(identificador_proceso_partida) do
+    Partida.obtener_resumen(identificador_proceso_partida)
+  end
+
+
 
   defmodule Consola do
 
-
     alias Trivia.Servidor
-    alias Trivia.Partida
+
 
 
     def inicio do
       IO.puts("\n— TRIVIA 🎮  (TERMINAL) —")
-      bucle(%{usuario_actual: nil, pid_partida_actual: nil})
+
+      estado_inicial = %{
+        usuario_actual: nil,
+        pid_partida_actual: nil,
+        nodo_servidor: nil
+      }
+
+      bucle(estado_inicial)
     end
+
+
 
     defp bucle(estado_consola) do
       opcion =
@@ -152,7 +191,7 @@ defmodule Trivia.Servidor do
       2. Crear partida
       3. Listar partidas activas
       4. Unirse a partida por ID
-      5. Iniciar partida (modo juego)
+      5. Iniciar partida / Entrar al juego
       8. Ver mi puntaje
       9. Ranking histórico global
       10. Ranking por tema
@@ -164,11 +203,12 @@ defmodule Trivia.Servidor do
     end
 
 
+
     defp login(estado_consola) do
       nombre_usuario = pedir("Nombre de usuario: ")
       contrasena = pedir("Contraseña: ")
 
-      case Servidor.conectar_usuario(nombre_usuario, contrasena) do
+      case llamar_servidor(estado_consola, :conectar_usuario, [nombre_usuario, contrasena]) do
         {:ok, _tipo_respuesta} ->
           IO.puts("Bienvenido/a #{nombre_usuario}")
           %{estado_consola | usuario_actual: nombre_usuario}
@@ -176,8 +216,13 @@ defmodule Trivia.Servidor do
         {:error, :contrasena_invalida} ->
           IO.puts("Contraseña inválida")
           estado_consola
+
+        otra_respuesta ->
+          IO.inspect(otra_respuesta, label: "Error al conectar usuario")
+          estado_consola
       end
     end
+
 
 
     defp crear_partida_desde_consola(%{usuario_actual: nil} = estado_consola) do
@@ -198,16 +243,19 @@ defmodule Trivia.Servidor do
       maximo_jugadores =
         pedir_entero("Máximo de jugadores (4): ", 4)
 
-      case Servidor.crear_partida(
-             nombre_usuario,
-             categoria,
-             cantidad_preguntas: cantidad_preguntas,
-             segundos_por_pregunta: segundos_por_pregunta,
-             max_jugadores: maximo_jugadores
-           ) do
+      opciones = [
+        cantidad_preguntas: cantidad_preguntas,
+        segundos_por_pregunta: segundos_por_pregunta,
+        max_jugadores: maximo_jugadores
+      ]
+
+      case llamar_servidor(estado_consola, :crear_partida, [nombre_usuario, categoria, opciones]) do
         {:ok, identificador_proceso_partida} ->
-          resumen_partida = Partida.obtener_resumen(identificador_proceso_partida)
+          resumen_partida =
+            llamar_servidor(estado_consola, :obtener_resumen_partida, [identificador_proceso_partida])
+
           IO.puts("Partida creada. ID: #{resumen_partida.identificador}")
+          IO.puts("El creador ya está unido automáticamente a la partida.")
 
           %{
             estado_consola
@@ -221,9 +269,12 @@ defmodule Trivia.Servidor do
     end
 
 
+
     defp listar_partidas_desde_consola(estado_consola) do
       IO.puts("\nPartidas activas:")
-      lista_resumenes = Servidor.listar_partidas()
+
+      lista_resumenes =
+        llamar_servidor(estado_consola, :listar_partidas, [])
 
       if lista_resumenes == [] do
         IO.puts("(ninguna)")
@@ -240,6 +291,7 @@ defmodule Trivia.Servidor do
     end
 
 
+
     defp unirse_desde_consola(%{usuario_actual: nil} = estado_consola) do
       IO.puts("Primero ingresa.")
       estado_consola
@@ -248,21 +300,24 @@ defmodule Trivia.Servidor do
     defp unirse_desde_consola(%{usuario_actual: nombre_usuario} = estado_consola) do
       identificador_partida = pedir_entero("ID de la partida: ", nil)
 
-      case Servidor.unirse_a_partida_por_id(identificador_partida, nombre_usuario) do
-        {:ok, :unido} ->
+      case llamar_servidor(estado_consola, :unirse_a_partida_por_id, [
+             identificador_partida,
+             nombre_usuario
+           ]) do
+        {:ok, :unido, identificador_proceso_partida} ->
           IO.puts("Te uniste")
 
           %{
             estado_consola
-            | pid_partida_actual: encontrar_pid_por_id(identificador_partida)
+            | pid_partida_actual: identificador_proceso_partida
           }
 
-        {:ok, :ya_estaba} ->
+        {:ok, :ya_estaba, identificador_proceso_partida} ->
           IO.puts("Ya estabas en la partida")
 
           %{
             estado_consola
-            | pid_partida_actual: encontrar_pid_por_id(identificador_partida)
+            | pid_partida_actual: identificador_proceso_partida
           }
 
         {:error, :no_encontrada} ->
@@ -278,7 +333,7 @@ defmodule Trivia.Servidor do
           estado_consola
 
         otra_respuesta ->
-          IO.inspect(otra_respuesta)
+          IO.inspect(otra_respuesta, label: "Respuesta inesperada al unirse")
           estado_consola
       end
     end
@@ -293,14 +348,36 @@ defmodule Trivia.Servidor do
            %{usuario_actual: nombre_usuario, pid_partida_actual: pid_partida} = estado_consola
          )
          when is_pid(pid_partida) do
-      case Servidor.iniciar_partida(pid_partida, nombre_usuario) do
-        {:ok, :iniciada} ->
-          IO.puts("¡Empezó! Entrando en modo juego…")
-          jugar_en_esta_consola(pid_partida, nombre_usuario)
+      case llamar_servidor(estado_consola, :obtener_resumen_partida, [pid_partida]) do
+        # Ya está iniciada → solo entramos al juego
+        %{iniciada: true} ->
+          IO.puts("La partida ya está iniciada. Entrando en modo juego…")
+          jugar_en_esta_consola(pid_partida, nombre_usuario, estado_consola)
           estado_consola
 
+        # Aún no está iniciada → intentamos iniciarla
+        %{iniciada: false} ->
+          case llamar_servidor(estado_consola, :iniciar_partida, [pid_partida, nombre_usuario]) do
+            {:ok, :iniciada} ->
+              IO.puts("¡Empezó! Entrando en modo juego…")
+              jugar_en_esta_consola(pid_partida, nombre_usuario, estado_consola)
+              estado_consola
+
+            {:error, :solo_creador} ->
+              IO.puts(
+                "Solo el creador puede iniciar la partida.\n" <>
+                  "Cuando la inicie, vuelve a esta opción (5) para ver las preguntas."
+              )
+
+              estado_consola
+
+            otra_respuesta ->
+              IO.inspect(otra_respuesta, label: "No se pudo iniciar")
+              estado_consola
+          end
+
         otra_respuesta ->
-          IO.inspect(otra_respuesta, label: "No se pudo iniciar")
+          IO.inspect(otra_respuesta, label: "No se pudo obtener el estado de la partida")
           estado_consola
       end
     end
@@ -311,55 +388,49 @@ defmodule Trivia.Servidor do
     end
 
 
-    defp jugar_en_esta_consola(identificador_proceso_partida, nombre_usuario) do
-      bucle_juego = fn recurrencia ->
-        case Partida.obtener_pregunta_actual(identificador_proceso_partida) do
-          {:ok, %{texto: texto_pregunta, opciones: opciones, indice: indice_pregunta}} ->
-            IO.puts("\nPregunta ##{indice_pregunta + 1}: #{texto_pregunta}")
+
+    defp jugar_en_esta_consola(pid_partida, nombre_usuario, estado_consola) do
+      bucle = fn recurrencia ->
+        case llamar_servidor(estado_consola, :obtener_pregunta_actual, [pid_partida]) do
+          {:ok, %{texto: texto, opciones: opciones, indice: indice}} ->
+            IO.puts("\nPregunta ##{indice + 1}: #{texto}")
             IO.puts("  A) #{opciones["A"]}")
             IO.puts("  B) #{opciones["B"]}")
             IO.puts("  C) #{opciones["C"]}")
             IO.puts("  D) #{opciones["D"]}")
 
-            respuesta_usuario =
+            respuesta =
               IO.gets("Tu respuesta (A/B/C/D). ENTER para omitir: ")
               |> default_a_cadena_vacia()
               |> String.trim()
               |> String.upcase()
 
-            if respuesta_usuario in ["A", "B", "C", "D"] do
-              case Partida.responder(
-                     identificador_proceso_partida,
+            if respuesta in ["A", "B", "C", "D"] do
+              case llamar_servidor(estado_consola, :responder_pregunta, [
+                     pid_partida,
                      nombre_usuario,
-                     respuesta_usuario
-                   ) do
-                {:ok, puntos_obtenidos} when puntos_obtenidos > 0 ->
-                  IO.puts("¡Correcta! +#{puntos_obtenidos}")
+                     respuesta
+                   ]) do
+                {:ok, puntos} when puntos > 0 ->
+                  IO.puts("¡Correcta! +#{puntos}")
 
-                {:ok, puntos_obtenidos} ->
-                  IO.puts("Incorrecta #{puntos_obtenidos}")
+                {:ok, puntos} ->
+                  IO.puts("Incorrecta (#{puntos})")
 
                 {:error, :ya_respondio} ->
-                  IO.puts("Ya respondiste esta ronda.")
-
-                {:error, :no_iniciada} ->
-                  IO.puts("La partida aún no inicia.")
-
-                {:error, :no_en_partida} ->
-                  IO.puts("No estás en esta partida.")
+                  IO.puts("Ya respondiste esta pregunta.")
 
                 {:error, :partida_terminada} ->
-                  IO.puts("La partida ya había terminado, se te acabó el tiempo.")
+                  IO.puts("La partida terminó.")
 
-                otra_respuesta ->
-                  IO.inspect(otra_respuesta, label: "Respuesta")
+                {:error, motivo} ->
+                  IO.puts("Error: #{inspect(motivo)}")
               end
             else
               IO.puts("Sin respuesta. Esperando siguiente pregunta…")
             end
 
-
-            esperar_siguiente_pregunta(identificador_proceso_partida, indice_pregunta)
+            esperar_siguiente_pregunta(pid_partida, indice, estado_consola)
             recurrencia.(recurrencia)
 
           {:ok, :esperando} ->
@@ -367,33 +438,29 @@ defmodule Trivia.Servidor do
             recurrencia.(recurrencia)
 
           {:ok, :finalizada} ->
-            IO.puts("\n⏱ Partida finalizada. Volviendo al menú…")
-            :ok
+            IO.puts("\n🏁 Partida finalizada")
 
-          {:error, _motivo} ->
+          {:error, _} ->
             :timer.sleep(300)
             recurrencia.(recurrencia)
         end
       end
 
-      bucle_juego.(bucle_juego)
+      bucle.(bucle)
     end
 
-    defp esperar_siguiente_pregunta(identificador_proceso_partida, indice_anterior) do
+    defp esperar_siguiente_pregunta(pid_partida, indice_anterior, estado_consola) do
       :timer.sleep(300)
 
-      case Partida.obtener_pregunta_actual(identificador_proceso_partida) do
+      case llamar_servidor(estado_consola, :obtener_pregunta_actual, [pid_partida]) do
         {:ok, %{indice: indice_nuevo}} when indice_nuevo > indice_anterior ->
           :ok
 
         {:ok, :finalizada} ->
           :ok
 
-        {:error, _motivo} ->
-          :ok
-
-        _otra_respuesta ->
-          esperar_siguiente_pregunta(identificador_proceso_partida, indice_anterior)
+        _ ->
+          esperar_siguiente_pregunta(pid_partida, indice_anterior, estado_consola)
       end
     end
 
@@ -404,19 +471,22 @@ defmodule Trivia.Servidor do
     end
 
     defp ver_mi_puntaje(%{usuario_actual: nombre_usuario} = estado_consola) do
-      case Trivia.GestorDeUsuarios.puntaje_propio(nombre_usuario) do
+      case llamar_servidor(estado_consola, :puntaje_usuario, [nombre_usuario]) do
         {:ok, puntaje} ->
           IO.puts("\n💠 Puntaje de #{nombre_usuario}: #{puntaje} puntos\n")
 
         {:error, :no_encontrado} ->
           IO.puts("No tienes puntaje registrado.")
+
+        otra_respuesta ->
+          IO.inspect(otra_respuesta, label: "Error al consultar puntaje")
       end
 
       estado_consola
     end
 
     defp ver_ranking_global(estado_consola) do
-      lista = Trivia.GestorDeUsuarios.ranking_global()
+      lista = llamar_servidor(estado_consola, :ranking_global, [])
 
       IO.puts("\n🏆 RANKING GLOBAL")
       IO.puts("----------------------")
@@ -438,7 +508,7 @@ defmodule Trivia.Servidor do
         IO.gets("¿Qué categoría deseas ver?: ")
         |> limpiar_texto()
 
-      lista = Trivia.Ranking.ranking_por_tema(categoria)
+      lista = llamar_servidor(estado_consola, :ranking_por_tema, [categoria])
 
       IO.puts("\n📚 Ranking por tema: #{categoria}")
       IO.puts("---------------------------")
@@ -458,7 +528,7 @@ defmodule Trivia.Servidor do
 
     defp configurar_red(estado_consola) do
       nombre_nodo =
-        IO.gets("Nombre del nodo (ej: servidor@127.0.0.1): ")
+        IO.gets("Nombre del nodo local (ej: servidor1, cliente1): ")
         |> limpiar_texto()
 
       cookie =
@@ -466,17 +536,47 @@ defmodule Trivia.Servidor do
         |> limpiar_texto()
         |> String.to_atom()
 
-      case Node.start(String.to_atom(nombre_nodo), :longnames) do
+      case Node.start(String.to_atom(nombre_nodo), :shortnames) do
         {:ok, _pid_nodo} ->
           Node.set_cookie(cookie)
 
           IO.puts("""
           Nodo iniciado correctamente.
-          Nombre: #{nombre_nodo}
+          Nombre local: #{inspect(Node.self())}
           Cookie: #{cookie}
           """)
 
-          estado_consola
+          tipo_nodo =
+            IO.gets("¿Este nodo será el servidor principal? (s/n): ")
+            |> limpiar_texto()
+            |> String.downcase()
+
+          nuevo_estado =
+            case tipo_nodo do
+              "s" ->
+                IO.puts("Este nodo actuará como SERVIDOR principal.")
+                %{estado_consola | nodo_servidor: Node.self()}
+
+              _otro ->
+                nodo_destino =
+                  IO.gets(
+                    "Nombre del nodo servidor al que deseas conectarte (ej: servidor1@LAPTOP-P2B5LCS0): "
+                  )
+                  |> limpiar_texto()
+                  |> String.to_atom()
+
+                case Node.connect(nodo_destino) do
+                  true ->
+                    IO.puts("✅ Conectado exitosamente al nodo #{inspect(nodo_destino)}")
+                    %{estado_consola | nodo_servidor: nodo_destino}
+
+                  false ->
+                    IO.puts("❌ No se pudo conectar al nodo #{inspect(nodo_destino)}")
+                    estado_consola
+                end
+            end
+
+          nuevo_estado
 
         {:error, razon} ->
           IO.puts("No se pudo iniciar el nodo: #{inspect(razon)}")
@@ -484,6 +584,20 @@ defmodule Trivia.Servidor do
       end
     end
 
+
+    defp llamar_servidor(estado_consola, nombre_funcion, argumentos) do
+      case Map.get(estado_consola, :nodo_servidor) do
+        nil ->
+          apply(Servidor, nombre_funcion, argumentos)
+
+        nodo_servidor ->
+          if nodo_servidor == Node.self() do
+            apply(Servidor, nombre_funcion, argumentos)
+          else
+            :rpc.call(nodo_servidor, Servidor, nombre_funcion, argumentos)
+          end
+      end
+    end
 
     defp pedir(mensaje) do
       mensaje
@@ -532,16 +646,6 @@ defmodule Trivia.Servidor do
         nil -> ""
         texto -> texto
       end
-    end
-
-    defp encontrar_pid_por_id(identificador_partida_buscado) do
-      Trivia.SupervisorDePartidas.listar_pids_activos()
-      |> Enum.find(fn identificador_proceso_partida ->
-        %{identificador: identificador_partida} =
-          Trivia.Partida.obtener_resumen(identificador_proceso_partida)
-
-        identificador_partida == identificador_partida_buscado
-      end)
     end
   end
 end
